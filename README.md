@@ -76,6 +76,27 @@ Remote MCP only — URL plus headers. (stdio servers are out of scope.)
 }
 ```
 
+## Examples
+
+Two example CLIs live under `cmd/`, each generated from a checked-in `mcp.json`:
+
+- `cmd/aws-knowledge-mcp` — [AWS Knowledge MCP](https://awslabs.github.io/mcp/servers/aws-knowledge-mcp-server) (no auth).
+- `cmd/gh-mcp` — [GitHub remote MCP](https://github.com/github/github-mcp-server) (`GITHUB_PAT` required at runtime).
+
+Run them via `go run`:
+
+```
+go run ./cmd/aws-knowledge-mcp aws-knowledge aws___list_regions
+GITHUB_PAT=<token> go run ./cmd/gh-mcp github get_me
+```
+
+Regenerate `generated.go` after the upstream tool list changes:
+
+```
+go run ./cmd/mcp-cli-gen --config ./cmd/aws-knowledge-mcp/mcp.json --config-flavor claude --package main > ./cmd/aws-knowledge-mcp/generated.go
+GITHUB_PAT=<token> go run ./cmd/mcp-cli-gen --config ./cmd/gh-mcp/mcp.json --config-flavor claude --package main > ./cmd/gh-mcp/generated.go
+```
+
 ## Design Notes
 
 - Transport: remote MCP only (SSE / streamable-http). stdio is not supported.

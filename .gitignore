@@ -1,0 +1,5 @@
+# Binaries from `go build ./cmd/<name>` at repo root.
+/mcp-cli-gen
+/mcpc
+/aws-knowledge-mcp
+/gh-mcp
