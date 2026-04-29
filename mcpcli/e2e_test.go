@@ -58,8 +58,8 @@ func snapshotFor(t *testing.T, ts *httptest.Server) mcpcli.Snapshot {
 			{Name: "test", URL: ts.URL, Headers: map[string]string{"Authorization": "Bearer ${TEST_PAT}"}},
 		},
 		Tools: []mcpcli.ToolSpec{
-			{Server: "test", Name: "echo", Description: "Echo a message", SchemaJSON: `{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}`},
-			{Server: "test", Name: "noargs", Description: "No-args ping", SchemaJSON: `{"type":"object"}`},
+			{Server: "test", Name: "echo", Description: []string{"Echo a message"}, SchemaJSON: `{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}`},
+			{Server: "test", Name: "noargs", Description: []string{"No-args ping"}, SchemaJSON: `{"type":"object"}`},
 		},
 	}
 }

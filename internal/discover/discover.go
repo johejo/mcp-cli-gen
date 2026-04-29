@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/johejo/mcp-cli-gen/internal/config"
@@ -84,9 +85,20 @@ func listTools(ctx context.Context, spec mcpcli.ServerSpec) ([]mcpcli.ToolSpec, 
 		out = append(out, mcpcli.ToolSpec{
 			Server:      spec.Name,
 			Name:        t.Name,
-			Description: t.Description,
+			Description: splitLines(t.Description),
 			SchemaJSON:  schemaJSON,
 		})
 	}
 	return out, nil
+}
+
+// splitLines breaks s on "\n" so each entry maps to one source line in the
+// generated code. Empty input yields nil (consistent with how the runtime
+// treats an absent description). The mapping is invertible via
+// strings.Join(_, "\n").
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }

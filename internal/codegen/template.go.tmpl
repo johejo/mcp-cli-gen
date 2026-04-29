@@ -26,8 +26,8 @@ func main() {
 			{
 				Server:      {{quote .Server}},
 				Name:        {{quote .Name}},
-				Description: {{quote .Description}},
-				SchemaJSON:  {{quote .SchemaJSON}},
+				Description: {{stringSlice .Description}},
+				SchemaJSON:  {{multilineJSON .SchemaJSON}},
 			},
 {{- end}}
 		},

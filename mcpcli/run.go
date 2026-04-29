@@ -79,7 +79,7 @@ func buildToolCmd(ctx context.Context, srv ServerSpec, tool ToolSpec, stdout, st
 	cmd := &cobra.Command{
 		Use:   tool.Name,
 		Short: shortDescription(tool.Description),
-		Long:  tool.Description,
+		Long:  strings.Join(tool.Description, "\n"),
 	}
 	flags := bindFlags(cmd.Flags(), schema, stderr)
 	cmd.Flags().String(flagParameters, "", "Send full payload as JSON: inline JSON object, or path to a .json file. Overrides per-flag values.")
@@ -106,11 +106,15 @@ func parseSchema(schemaJSON string, stderr io.Writer, server, tool string) *json
 	return &s
 }
 
-func shortDescription(d string) string {
-	if i := strings.IndexAny(d, "\r\n"); i >= 0 {
-		return d[:i]
+func shortDescription(d []string) string {
+	if len(d) == 0 {
+		return ""
 	}
-	return d
+	first := d[0]
+	if i := strings.IndexAny(first, "\r\n"); i >= 0 {
+		return first[:i]
+	}
+	return first
 }
 
 // buildArgs returns the arguments map to send to tools/call.

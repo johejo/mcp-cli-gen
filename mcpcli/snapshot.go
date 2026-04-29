@@ -21,8 +21,8 @@ type ServerSpec struct {
 
 // ToolSpec is a single MCP tool exposed under a given server.
 type ToolSpec struct {
-	Server      string // matches ServerSpec.Name
-	Name        string // verbatim MCP tool name
-	Description string
-	SchemaJSON  string // JSON-encoded inputSchema; unmarshalled into *jsonschema.Schema at runtime
+	Server      string   // matches ServerSpec.Name
+	Name        string   // verbatim MCP tool name
+	Description []string // one entry per source line; joined with "\n" at runtime
+	SchemaJSON  string   // JSON-encoded inputSchema; unmarshalled into *jsonschema.Schema at runtime
 }
