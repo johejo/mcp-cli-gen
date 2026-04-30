@@ -21,7 +21,7 @@ func TestRender_ProducesValidGo(t *testing.T) {
 			{Server: "github", Name: "create_issue", Description: []string{"Create an issue."}, SchemaJSON: `{"type":"object","properties":{"title":{"type":"string"}}}`},
 		},
 	}
-	out, err := Render(snap, "main")
+	out, err := Render(snap, "main", mcpcli.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,8 +41,39 @@ func TestRender_ProducesValidGo(t *testing.T) {
 }
 
 func TestRender_RequiresPackageName(t *testing.T) {
-	if _, err := Render(mcpcli.Snapshot{}, ""); err == nil {
+	if _, err := Render(mcpcli.Snapshot{}, "", mcpcli.Options{}); err == nil {
 		t.Fatal("expected error for empty package")
+	}
+}
+
+func TestRender_FlattenEmitsOptions(t *testing.T) {
+	snap := mcpcli.Snapshot{
+		Servers: []mcpcli.ServerSpec{{Name: "s", URL: "http://x"}},
+		Tools: []mcpcli.ToolSpec{
+			{Server: "s", Name: "t", Description: []string{"x"}, SchemaJSON: `{"type":"object"}`},
+		},
+	}
+
+	off, err := Render(snap, "main", mcpcli.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(off), "mcpcli.Options") {
+		t.Errorf("default render must not emit mcpcli.Options:\n%s", off)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "g.go", off, 0); err != nil {
+		t.Fatalf("default render does not parse: %v\n%s", err, off)
+	}
+
+	on, err := Render(snap, "main", mcpcli.Options{Flatten: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(on), "mcpcli.Options{Flatten: true}") {
+		t.Errorf("flatten render must emit mcpcli.Options{Flatten: true}:\n%s", on)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "g.go", on, 0); err != nil {
+		t.Fatalf("flatten render does not parse: %v\n%s", err, on)
 	}
 }
 
@@ -56,7 +87,7 @@ func TestRender_TricksyContent(t *testing.T) {
 			{Server: "s", Name: "t", Description: []string{"weird `backticks` and \"quotes\""}, SchemaJSON: `{"type":"object"}`},
 		},
 	}
-	out, err := Render(snap, "main")
+	out, err := Render(snap, "main", mcpcli.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +115,7 @@ func TestRender_MultilineDescription_SliceLiteral(t *testing.T) {
 			{Server: "s", Name: "t", Description: desc, SchemaJSON: `{"type":"object"}`},
 		},
 	}
-	out, err := Render(snap, "main")
+	out, err := Render(snap, "main", mcpcli.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +144,7 @@ func TestRender_EmptyDescription_Nil(t *testing.T) {
 			{Server: "s", Name: "t", Description: nil, SchemaJSON: `{"type":"object"}`},
 		},
 	}
-	out, err := Render(snap, "main")
+	out, err := Render(snap, "main", mcpcli.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +164,7 @@ func TestRender_SchemaJSON_PrettyPrinted(t *testing.T) {
 			{Server: "s", Name: "t", Description: []string{"x"}, SchemaJSON: schema},
 		},
 	}
-	out, err := Render(snap, "main")
+	out, err := Render(snap, "main", mcpcli.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -25,8 +25,9 @@ var tmpl = template.Must(template.New("generated").Funcs(template.FuncMap{
 }).Parse(rawTemplate))
 
 // Render returns formatted Go source for the snapshot under the given
-// package name (e.g. "main").
-func Render(snap mcpcli.Snapshot, packageName string) ([]byte, error) {
+// package name (e.g. "main"). When opts is non-zero, an mcpcli.Options
+// literal is emitted alongside the snapshot in the generated Run call.
+func Render(snap mcpcli.Snapshot, packageName string, opts mcpcli.Options) ([]byte, error) {
 	if packageName == "" {
 		return nil, fmt.Errorf("package name is required")
 	}
@@ -39,10 +40,12 @@ func Render(snap mcpcli.Snapshot, packageName string) ([]byte, error) {
 		Package string
 		Servers []mcpcli.ServerSpec
 		Tools   []mcpcli.ToolSpec
+		Flatten bool
 	}{
 		Package: packageName,
 		Servers: snap.Servers,
 		Tools:   tools,
+		Flatten: opts.Flatten,
 	}
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {

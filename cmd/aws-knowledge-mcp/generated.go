@@ -674,5 +674,5 @@ func main() {
 }`,
 			},
 		},
-	})
+	}, mcpcli.Options{Flatten: true})
 }

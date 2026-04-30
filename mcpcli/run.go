@@ -15,9 +15,15 @@ import (
 )
 
 // Run builds the cobra tree from snap and dispatches based on os.Args.
-// The process exits with a non-zero status on error.
-func Run(snap Snapshot) {
-	if err := Execute(context.Background(), snap, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+// The process exits with a non-zero status on error. The variadic opts
+// argument keeps backward compatibility with generated code that calls
+// Run(snap) with no options; only the first element is consulted.
+func Run(snap Snapshot, opts ...Options) {
+	var o Options
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	if err := Execute(context.Background(), snap, o, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -26,15 +32,22 @@ func Run(snap Snapshot) {
 // Execute is the testable entry point: it runs cobra against the supplied
 // args and writes output to stdout/stderr writers. It returns nil on success
 // and a non-nil error if the user-facing process should exit non-zero.
-func Execute(ctx context.Context, snap Snapshot, args []string, stdout, stderr io.Writer) error {
-	root := buildRoot(ctx, snap, stdout, stderr)
+func Execute(ctx context.Context, snap Snapshot, opts Options, args []string, stdout, stderr io.Writer) error {
+	if opts.Flatten && len(snap.Servers) > 1 {
+		names := make([]string, len(snap.Servers))
+		for i, s := range snap.Servers {
+			names[i] = s.Name
+		}
+		return fmt.Errorf("--flatten requires a single server, but %d are configured: %s", len(snap.Servers), strings.Join(names, ", "))
+	}
+	root := buildRoot(ctx, snap, opts, stdout, stderr)
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	return root.Execute()
 }
 
-func buildRoot(ctx context.Context, snap Snapshot, stdout, stderr io.Writer) *cobra.Command {
+func buildRoot(ctx context.Context, snap Snapshot, opts Options, stdout, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
 		Use:           filepath.Base(os.Args[0]),
 		Short:         "MCP CLI",
@@ -45,6 +58,18 @@ func buildRoot(ctx context.Context, snap Snapshot, stdout, stderr io.Writer) *co
 	servers := map[string]ServerSpec{}
 	for _, s := range snap.Servers {
 		servers[s.Name] = s
+	}
+
+	if opts.Flatten {
+		for _, t := range snap.Tools {
+			srv, ok := servers[t.Server]
+			if !ok {
+				fmt.Fprintf(stderr, "warning: tool %s/%s skipped: server %q not in snapshot\n", t.Server, t.Name, t.Server)
+				continue
+			}
+			root.AddCommand(buildToolCmd(ctx, srv, t, stdout, stderr))
+		}
+		return root
 	}
 
 	groups := map[string]*cobra.Command{}

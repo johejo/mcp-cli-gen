@@ -26,3 +26,14 @@ type ToolSpec struct {
 	Description []string // one entry per source line; joined with "\n" at runtime
 	SchemaJSON  string   // JSON-encoded inputSchema; unmarshalled into *jsonschema.Schema at runtime
 }
+
+// Options tweaks how a Snapshot is bound to the cobra tree at runtime. It is
+// passed alongside Snapshot rather than embedded in it so that Snapshot stays
+// a pure data model (servers + tools) with no UX knobs.
+type Options struct {
+	// Flatten drops the server-name subcommand tier and attaches each tool
+	// directly to the root command. Intended for single-server configs where
+	// <cli_name> and <server_name> end up nearly identical. Requires
+	// len(Snapshot.Servers) <= 1; Execute returns an error otherwise.
+	Flatten bool
+}

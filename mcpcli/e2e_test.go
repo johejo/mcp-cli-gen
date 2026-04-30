@@ -71,7 +71,7 @@ func TestE2E_PerFlag(t *testing.T) {
 
 	snap := snapshotFor(t, ts)
 	var stdout, stderr bytes.Buffer
-	err := mcpcli.Execute(context.Background(), snap, []string{"test", "echo", "--message", "hello"}, &stdout, &stderr)
+	err := mcpcli.Execute(context.Background(), snap, mcpcli.Options{}, []string{"test", "echo", "--message", "hello"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("Execute: %v\nstderr: %s", err, stderr.String())
 	}
@@ -86,7 +86,7 @@ func TestE2E_ParametersInline(t *testing.T) {
 
 	snap := snapshotFor(t, ts)
 	var stdout, stderr bytes.Buffer
-	err := mcpcli.Execute(context.Background(), snap,
+	err := mcpcli.Execute(context.Background(), snap, mcpcli.Options{},
 		[]string{"test", "echo", "--parameters", `{"message":"world"}`}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("Execute: %v\nstderr: %s", err, stderr.String())
@@ -102,7 +102,7 @@ func TestE2E_RequiredFlagMissing(t *testing.T) {
 
 	snap := snapshotFor(t, ts)
 	var stdout, stderr bytes.Buffer
-	err := mcpcli.Execute(context.Background(), snap, []string{"test", "echo"}, &stdout, &stderr)
+	err := mcpcli.Execute(context.Background(), snap, mcpcli.Options{}, []string{"test", "echo"}, &stdout, &stderr)
 	if err == nil {
 		t.Fatalf("expected error for missing --message")
 	}
@@ -117,7 +117,7 @@ func TestE2E_NoArgsTool(t *testing.T) {
 
 	snap := snapshotFor(t, ts)
 	var stdout, stderr bytes.Buffer
-	err := mcpcli.Execute(context.Background(), snap, []string{"test", "noargs"}, &stdout, &stderr)
+	err := mcpcli.Execute(context.Background(), snap, mcpcli.Options{}, []string{"test", "noargs"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -138,12 +138,82 @@ func TestE2E_ParametersFromFile(t *testing.T) {
 
 	snap := snapshotFor(t, ts)
 	var stdout, stderr bytes.Buffer
-	err := mcpcli.Execute(context.Background(), snap,
+	err := mcpcli.Execute(context.Background(), snap, mcpcli.Options{},
 		[]string{"test", "echo", "--parameters", path}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("Execute: %v\nstderr: %s", err, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "from-file") {
 		t.Errorf("expected from-file in output: %s", stdout.String())
+	}
+}
+
+func TestE2E_Flatten_PerFlag(t *testing.T) {
+	ts := startTestServer(t)
+	defer ts.Close()
+	t.Setenv("TEST_PAT", "secret123")
+
+	snap := snapshotFor(t, ts)
+	var stdout, stderr bytes.Buffer
+	err := mcpcli.Execute(context.Background(), snap, mcpcli.Options{Flatten: true},
+		[]string{"echo", "--message", "hello"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Execute: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "hello|Bearer secret123") {
+		t.Errorf("output missing echo+auth: %s", stdout.String())
+	}
+}
+
+func TestE2E_Flatten_NoArgsTool(t *testing.T) {
+	ts := startTestServer(t)
+	defer ts.Close()
+
+	snap := snapshotFor(t, ts)
+	var stdout, stderr bytes.Buffer
+	err := mcpcli.Execute(context.Background(), snap, mcpcli.Options{Flatten: true},
+		[]string{"noargs"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Execute: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "pong") {
+		t.Errorf("expected pong: %s", stdout.String())
+	}
+}
+
+func TestE2E_Flatten_RejectsServerSubcommand(t *testing.T) {
+	ts := startTestServer(t)
+	defer ts.Close()
+
+	snap := snapshotFor(t, ts)
+	var stdout, stderr bytes.Buffer
+	err := mcpcli.Execute(context.Background(), snap, mcpcli.Options{Flatten: true},
+		[]string{"test", "echo", "--message", "x"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatalf("expected error when invoking with the server tier under --flatten; stdout=%s", stdout.String())
+	}
+}
+
+func TestE2E_Flatten_MultiServerErrors(t *testing.T) {
+	snap := mcpcli.Snapshot{
+		Servers: []mcpcli.ServerSpec{
+			{Name: "alpha", URL: "http://example.invalid/a"},
+			{Name: "beta", URL: "http://example.invalid/b"},
+		},
+		Tools: []mcpcli.ToolSpec{
+			{Server: "alpha", Name: "ping", Description: []string{"p"}, SchemaJSON: `{"type":"object"}`},
+			{Server: "beta", Name: "pong", Description: []string{"q"}, SchemaJSON: `{"type":"object"}`},
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	err := mcpcli.Execute(context.Background(), snap, mcpcli.Options{Flatten: true},
+		[]string{"ping"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatalf("expected error for --flatten with multiple servers")
+	}
+	for _, want := range []string{"alpha", "beta", "--flatten"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err.Error(), want)
+		}
 	}
 }

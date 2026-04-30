@@ -26,6 +26,7 @@ func run(args []string) error {
 	fs.SetOutput(os.Stderr)
 	configPath := fs.String("config", "", "Path to mcp.json")
 	flavor := fs.String("config-flavor", "", "Config flavor (only \"claude\" is supported)")
+	flatten := fs.Bool("flatten", false, "Drop the server-name subcommand tier (single-server configs only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -46,5 +47,5 @@ func run(args []string) error {
 	// Empty snapshot is allowed: lets `mcpc --help` still print the root tree.
 
 	rest := fs.Args()
-	return mcpcli.Execute(ctx, snap, rest, os.Stdout, os.Stderr)
+	return mcpcli.Execute(ctx, snap, mcpcli.Options{Flatten: *flatten}, rest, os.Stdout, os.Stderr)
 }

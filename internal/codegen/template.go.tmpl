@@ -31,5 +31,5 @@ func main() {
 			},
 {{- end}}
 		},
-	})
+	}{{if .Flatten}}, mcpcli.Options{Flatten: true}{{end}})
 }
