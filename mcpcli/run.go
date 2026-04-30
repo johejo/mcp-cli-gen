@@ -40,20 +40,31 @@ func Execute(ctx context.Context, snap Snapshot, opts Options, args []string, st
 		}
 		return fmt.Errorf("--flatten requires a single server, but %d are configured: %s", len(snap.Servers), strings.Join(names, ", "))
 	}
-	root := buildRoot(ctx, snap, opts, stdout, stderr)
+	ort := &oauthRuntime{stderr: stderr}
+	root := buildRoot(ctx, snap, opts, stdout, stderr, ort)
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	return root.Execute()
 }
 
-func buildRoot(ctx context.Context, snap Snapshot, opts Options, stdout, stderr io.Writer) *cobra.Command {
+func buildRoot(ctx context.Context, snap Snapshot, opts Options, stdout, stderr io.Writer, ort *oauthRuntime) *cobra.Command {
 	root := &cobra.Command{
 		Use:           filepath.Base(os.Args[0]),
 		Short:         "MCP CLI",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.PersistentFlags().StringVar(&ort.storeOpts.CacheDir, oauthFlagTokenCache, "",
+		"Directory for the file-based OAuth token cache (default: $XDG_CACHE_HOME/mcp-cli-gen/tokens)")
+	root.PersistentFlags().StringVar(&ort.storeOpts.GetCmd, oauthFlagTokenGetCmd, "",
+		"Shell command that prints the cached token JSON to stdout (overrides --"+oauthFlagTokenCache+"). Receives MCPCLI_OAUTH_SERVER and MCPCLI_OAUTH_URL in env.")
+	root.PersistentFlags().StringVar(&ort.storeOpts.SetCmd, oauthFlagTokenSetCmd, "",
+		"Shell command that reads the token JSON from stdin. Required together with --"+oauthFlagTokenGetCmd+".")
+	root.PersistentFlags().IntVar(&ort.callbackPort, oauthFlagCallbackPort, 0,
+		"Fixed localhost port for the OAuth callback (default: ephemeral)")
+	root.PersistentFlags().StringVar(&ort.clientID, oauthFlagClientID, "",
+		"Pre-registered OAuth client_id; skips Dynamic Client Registration when set")
 
 	servers := map[string]ServerSpec{}
 	for _, s := range snap.Servers {
@@ -67,7 +78,7 @@ func buildRoot(ctx context.Context, snap Snapshot, opts Options, stdout, stderr 
 				fmt.Fprintf(stderr, "warning: tool %s/%s skipped: server %q not in snapshot\n", t.Server, t.Name, t.Server)
 				continue
 			}
-			root.AddCommand(buildToolCmd(ctx, srv, t, stdout, stderr))
+			root.AddCommand(buildToolCmd(ctx, srv, t, stdout, stderr, ort))
 		}
 		return root
 	}
@@ -93,12 +104,12 @@ func buildRoot(ctx context.Context, snap Snapshot, opts Options, stdout, stderr 
 			fmt.Fprintf(stderr, "warning: tool %s/%s skipped: server %q not in snapshot\n", t.Server, t.Name, t.Server)
 			continue
 		}
-		group.AddCommand(buildToolCmd(ctx, servers[t.Server], t, stdout, stderr))
+		group.AddCommand(buildToolCmd(ctx, servers[t.Server], t, stdout, stderr, ort))
 	}
 	return root
 }
 
-func buildToolCmd(ctx context.Context, srv ServerSpec, tool ToolSpec, stdout, stderr io.Writer) *cobra.Command {
+func buildToolCmd(ctx context.Context, srv ServerSpec, tool ToolSpec, stdout, stderr io.Writer, ort *oauthRuntime) *cobra.Command {
 	schema := parseSchema(tool.SchemaJSON, stderr, tool.Server, tool.Name)
 
 	cmd := &cobra.Command{
@@ -114,7 +125,7 @@ func buildToolCmd(ctx context.Context, srv ServerSpec, tool ToolSpec, stdout, st
 		if err != nil {
 			return err
 		}
-		return invoke(ctx, srv, tool.Name, args, stdout)
+		return invoke(ctx, srv, tool.Name, args, stdout, ort)
 	}
 	return cmd
 }
@@ -178,8 +189,8 @@ func loadParameters(v string) (map[string]any, error) {
 	return args, nil
 }
 
-func invoke(ctx context.Context, srv ServerSpec, toolName string, args map[string]any, stdout io.Writer) error {
-	session, err := Connect(ctx, srv)
+func invoke(ctx context.Context, srv ServerSpec, toolName string, args map[string]any, stdout io.Writer, ort *oauthRuntime) error {
+	session, err := connectWith(ctx, srv, *ort)
 	if err != nil {
 		return err
 	}

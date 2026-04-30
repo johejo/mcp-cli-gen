@@ -14,13 +14,26 @@ import (
 // reservedFlagNames are flag names we own ourselves or that cobra/pflag reserve.
 // Properties whose name collides with these are renamed to avoid panics or
 // conflicting semantics. Keep this list in sync with flags actually declared
-// on tool subcommands (see buildToolCmd) and cobra defaults (--help).
+// on tool subcommands (see buildToolCmd), cobra defaults (--help), and the
+// root persistent flags inherited at every level (see buildRoot).
 var reservedFlagNames = map[string]bool{
-	flagParameters: true,
-	"help":         true,
+	flagParameters:        true,
+	"help":                true,
+	oauthFlagTokenCache:   true,
+	oauthFlagTokenGetCmd:  true,
+	oauthFlagTokenSetCmd:  true,
+	oauthFlagCallbackPort: true,
+	oauthFlagClientID:     true,
 }
 
-const flagParameters = "parameters"
+const (
+	flagParameters        = "parameters"
+	oauthFlagTokenCache   = "oauth-token-cache"
+	oauthFlagTokenGetCmd  = "oauth-token-get-cmd"
+	oauthFlagTokenSetCmd  = "oauth-token-set-cmd"
+	oauthFlagCallbackPort = "oauth-callback-port"
+	oauthFlagClientID     = "oauth-client-id"
+)
 
 type flagKind int
 

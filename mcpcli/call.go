@@ -3,6 +3,7 @@ package mcpcli
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -39,12 +40,47 @@ func expandHeaders(in map[string]string) map[string]string {
 	return out
 }
 
-// Connect dials the given server with Streamable HTTP transport. The caller
-// must Close the returned session.
+// oauthRuntime collects OAuth-related runtime knobs that the CLI populates
+// from persistent flags. Zero value yields the default: file-based token
+// cache at $XDG_CACHE_HOME/mcp-cli-gen/tokens, ephemeral callback port,
+// no preset client_id.
+type oauthRuntime struct {
+	storeOpts    oauthStoreOptions
+	callbackPort int
+	clientID     string
+	stderr       io.Writer
+}
+
+// Connect dials the given server with Streamable HTTP transport using
+// default OAuth runtime settings. The caller must Close the returned
+// session.
 func Connect(ctx context.Context, srv ServerSpec) (*mcp.ClientSession, error) {
+	return connectWith(ctx, srv, oauthRuntime{stderr: os.Stderr})
+}
+
+// connectWith is the internal entry that the cobra runtime uses so that CLI
+// flags can supply token store and callback configuration.
+func connectWith(ctx context.Context, srv ServerSpec, ort oauthRuntime) (*mcp.ClientSession, error) {
+	store, err := newTokenStore(ort.storeOpts)
+	if err != nil {
+		return nil, fmt.Errorf("oauth store: %w", err)
+	}
+	stderr := ort.stderr
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	oauthRT := &oauthRoundTripper{
+		base:      http.DefaultTransport,
+		store:     store,
+		server:    srv.Name,
+		serverURL: srv.URL,
+		clientID:  ort.clientID,
+		cbPort:    ort.callbackPort,
+		stderr:    stderr,
+	}
 	httpClient := &http.Client{
 		Transport: &headerRoundTripper{
-			base:    http.DefaultTransport,
+			base:    oauthRT,
 			headers: expandHeaders(srv.Headers),
 		},
 	}
