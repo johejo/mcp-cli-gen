@@ -21,6 +21,25 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// isBearerChallenge reports whether the WWW-Authenticate header value carries
+// a Bearer challenge. Used to gate OAuth discovery: a 401 with a non-Bearer
+// scheme (or no header at all) is not an OAuth-protected resource.
+func isBearerChallenge(challenge string) bool {
+	const want = "bearer"
+	c := strings.TrimSpace(challenge)
+	if len(c) < len(want) {
+		return false
+	}
+	if !strings.EqualFold(c[:len(want)], want) {
+		return false
+	}
+	if len(c) == len(want) {
+		return true
+	}
+	next := c[len(want)]
+	return next == ' ' || next == '\t'
+}
+
 // parseResourceMetadataURL extracts the `resource_metadata` parameter from a
 // `WWW-Authenticate: Bearer ...` challenge per RFC 9728.
 //
@@ -343,26 +362,65 @@ func startCallbackListener(port int) (net.Listener, string, error) {
 	return l, redirect, nil
 }
 
+// resolveAS discovers the authorization server metadata that protects the
+// resource at resourceURL.
+//
+// Preferred path (RFC 9728): the WWW-Authenticate challenge carries
+// resource_metadata=<url> pointing at a Protected Resource Metadata document;
+// PRM lists authorization_servers[]; we fetch AS metadata for the first
+// listed issuer.
+//
+// Fallback: when PRM is absent or unreachable, probe AS metadata under the
+// resource URL directly — first using the resource path (RFC 8414 inserted
+// and OIDC appended forms), then under the resource host root. This covers
+// servers (e.g. Atlassian Remote MCP) that answer with a Bearer challenge
+// but publish RFC 8414 metadata at <resource_host>/.well-known/oauth-
+// authorization-server without an intermediate PRM document.
+func resolveAS(ctx context.Context, resource *url.URL, challenge string, stderr io.Writer) (*asMetadata, error) {
+	if prmURL := parseResourceMetadataURL(challenge); prmURL != "" {
+		if as, err := asFromPRM(ctx, prmURL); err == nil {
+			return as, nil
+		} else if stderr != nil {
+			fmt.Fprintf(stderr, "warning: PRM-based AS discovery via %s failed (%v); falling back to direct AS metadata\n", prmURL, err)
+		}
+	}
+	as, err := fetchASMetadata(ctx, resource.String())
+	if err == nil {
+		return as, nil
+	}
+	// Origin form would issue identical probes when the resource has no path,
+	// so skip the redundant trip and surface the resource-level error.
+	if resource.Path == "" || resource.Path == "/" {
+		return nil, err
+	}
+	origin := *resource
+	origin.Path = ""
+	origin.RawQuery = ""
+	origin.Fragment = ""
+	return fetchASMetadata(ctx, origin.String())
+}
+
+func asFromPRM(ctx context.Context, prmURL string) (*asMetadata, error) {
+	prm, err := fetchPRM(ctx, prmURL)
+	if err != nil {
+		return nil, err
+	}
+	return fetchASMetadata(ctx, prm.AuthorizationServers[0])
+}
+
 // oauthFlowParams collects every input the reactive flow needs.
 type oauthFlowParams struct {
-	PRMURL       string
+	ASMeta       *asMetadata
 	CallbackPort int
 	ClientID     string // pre-registered, optional
 	Stderr       io.Writer
 }
 
-// performInteractiveFlow runs the full reactive sequence: PRM → AS metadata
-// → DCR (if needed) → PKCE auth code → token. Returns a persistedToken ready
-// to be saved.
+// performInteractiveFlow runs the post-discovery sequence: DCR (if needed) →
+// PKCE auth code → token. Returns a persistedToken ready to be saved. AS
+// metadata must be resolved by the caller (see resolveAS).
 func performInteractiveFlow(ctx context.Context, p oauthFlowParams) (*persistedToken, error) {
-	prm, err := fetchPRM(ctx, p.PRMURL)
-	if err != nil {
-		return nil, err
-	}
-	asMeta, err := fetchASMetadata(ctx, prm.AuthorizationServers[0])
-	if err != nil {
-		return nil, err
-	}
+	asMeta := p.ASMeta
 	listener, redirect, err := startCallbackListener(p.CallbackPort)
 	if err != nil {
 		return nil, err

@@ -516,6 +516,212 @@ func TestOAuthRoundTripper_EmptyBearerTriggersFlow(t *testing.T) {
 	}
 }
 
+func TestResolveAS(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// AS metadata at the resource host root only (no PRM, no resource path).
+	asDoc := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                 srv.URL,
+			"authorization_endpoint": srv.URL + "/authorize",
+			"token_endpoint":         srv.URL + "/token",
+		})
+	}
+	mux.HandleFunc("/.well-known/oauth-authorization-server", asDoc)
+
+	// PRM URL we'll advertise; deliberately returns 404 to exercise the
+	// "PRM advertised but unreachable → fallback" branch.
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+
+	resource, _ := url.Parse(srv.URL + "/v1/mcp")
+
+	t.Run("no PRM advertised, falls through to origin form", func(t *testing.T) {
+		got, err := resolveAS(context.Background(), resource, `Bearer realm="OAuth"`, io.Discard)
+		if err != nil {
+			t.Fatalf("resolveAS: %v", err)
+		}
+		if got.AuthorizationEndpoint != srv.URL+"/authorize" {
+			t.Errorf("auth endpoint = %q, want %q", got.AuthorizationEndpoint, srv.URL+"/authorize")
+		}
+	})
+
+	t.Run("PRM advertised but unreachable, warns and falls back", func(t *testing.T) {
+		var stderr strings.Builder
+		challenge := `Bearer resource_metadata="` + srv.URL + `/.well-known/oauth-protected-resource"`
+		got, err := resolveAS(context.Background(), resource, challenge, &stderr)
+		if err != nil {
+			t.Fatalf("resolveAS: %v", err)
+		}
+		if got.TokenEndpoint != srv.URL+"/token" {
+			t.Errorf("token endpoint = %q, want %q", got.TokenEndpoint, srv.URL+"/token")
+		}
+		if !strings.Contains(stderr.String(), "PRM-based AS discovery") {
+			t.Errorf("expected PRM fallback warning, got %q", stderr.String())
+		}
+	})
+
+	t.Run("no AS anywhere, returns error", func(t *testing.T) {
+		// Point at a port that will never answer success: a different mux
+		// with no AS endpoint.
+		dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.NotFound(w, nil)
+		}))
+		defer dead.Close()
+		deadResource, _ := url.Parse(dead.URL + "/v1/mcp")
+		if _, err := resolveAS(context.Background(), deadResource, `Bearer`, io.Discard); err == nil {
+			t.Fatal("expected error when no AS metadata is reachable")
+		}
+	})
+}
+
+func TestIsBearerChallenge(t *testing.T) {
+	cases := []struct {
+		v    string
+		want bool
+	}{
+		{"", false},
+		{"Bearer", true},
+		{"Bearer ", true},
+		{`Bearer realm="api"`, true},
+		{"bearer abc", true},
+		{`Bearer realm="OAuth", error="invalid_token"`, true},
+		{"Basic realm=api", false},
+		{"DPoP", false},
+		{"BearerToken", false}, // not separated by whitespace
+	}
+	for _, c := range cases {
+		if got := isBearerChallenge(c.v); got != c.want {
+			t.Errorf("isBearerChallenge(%q) = %v, want %v", c.v, got, c.want)
+		}
+	}
+}
+
+// TestOAuthRoundTripper_FallbackASDirect covers servers (e.g. Atlassian Remote
+// MCP) that issue a Bearer challenge without RFC 9728 resource_metadata and
+// publish RFC 8414 metadata directly under the resource host. The reactive
+// flow must still complete via the direct AS-metadata fallback in resolveAS.
+func TestOAuthRoundTripper_FallbackASDirect(t *testing.T) {
+	var dcrSeen bool
+	var issued string
+	var seenBearer string
+	var mu sync.Mutex
+
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// AS metadata at the resource host root (no PRM published anywhere).
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                           srv.URL,
+			"authorization_endpoint":           srv.URL + "/authorize",
+			"token_endpoint":                   srv.URL + "/token",
+			"registration_endpoint":            srv.URL + "/register",
+			"code_challenge_methods_supported": []string{"S256"},
+		})
+	})
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		dcrSeen = true
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"client_id": "dcr-fallback"})
+	})
+	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		u, _ := url.Parse(q.Get("redirect_uri"))
+		rq := u.Query()
+		rq.Set("code", "auth-code-fb")
+		rq.Set("state", q.Get("state"))
+		u.RawQuery = rq.Encode()
+		http.Redirect(w, r, u.String(), http.StatusFound)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.Form.Get("grant_type") != "authorization_code" {
+			http.Error(w, "unsupported grant", http.StatusBadRequest)
+			return
+		}
+		if r.Form.Get("code_verifier") == "" {
+			http.Error(w, "missing PKCE verifier", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		issued = "access-token-fb"
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "access-token-fb",
+			"token_type":    "Bearer",
+			"refresh_token": "refresh-fb",
+			"expires_in":    3600,
+		})
+	})
+	// MCP resource path: 401 with Atlassian-style challenge (no resource_metadata).
+	mux.HandleFunc("/v1/mcp", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer access-token-fb" {
+			mu.Lock()
+			seenBearer = r.Header.Get("Authorization")
+			mu.Unlock()
+			_, _ = io.WriteString(w, "ok")
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="OAuth", error="invalid_token", error_description="Missing or invalid access token"`)
+		http.Error(w, "auth required", http.StatusUnauthorized)
+	})
+
+	prev := openBrowser
+	openBrowser = func(target string) error {
+		go func() {
+			c := &http.Client{Timeout: 5 * time.Second}
+			resp, err := c.Get(target)
+			if err == nil && resp != nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+			}
+		}()
+		return nil
+	}
+	defer func() { openBrowser = prev }()
+
+	store := &fileStore{dir: filepath.Join(t.TempDir(), "tokens")}
+	rt := &oauthRoundTripper{
+		base:      http.DefaultTransport,
+		store:     store,
+		server:    "test-fallback",
+		serverURL: srv.URL + "/v1/mcp",
+		stderr:    io.Discard,
+	}
+	client := &http.Client{Transport: rt, Timeout: 30 * time.Second}
+
+	resp, err := client.Get(srv.URL + "/v1/mcp")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("expected 200 ok via direct AS fallback; got status=%d body=%q", resp.StatusCode, string(body))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !dcrSeen {
+		t.Error("expected DCR call during fallback flow")
+	}
+	if issued != "access-token-fb" {
+		t.Errorf("expected access-token-fb issued, got %q", issued)
+	}
+	if seenBearer != "Bearer access-token-fb" {
+		t.Errorf("MCP did not see fallback bearer: %q", seenBearer)
+	}
+}
+
 func TestOAuthRoundTripper_RefreshFlow(t *testing.T) {
 	var refreshCalls int32
 	asMux := http.NewServeMux()

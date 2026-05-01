@@ -59,8 +59,15 @@ func (o *oauthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	if err != nil || resp.StatusCode != http.StatusUnauthorized {
 		return resp, err
 	}
-	prmURL := parseResourceMetadataURL(resp.Header.Get("WWW-Authenticate"))
-	if prmURL == "" {
+	challenge := resp.Header.Get("WWW-Authenticate")
+	if !isBearerChallenge(challenge) {
+		return resp, nil
+	}
+	asMeta, asErr := resolveAS(ctx, req.URL, challenge, o.stderr)
+	if asErr != nil {
+		// Surface the original 401 so the caller sees a real auth failure
+		// rather than a discovery error masking it.
+		fmt.Fprintf(o.stderr, "warning: oauth discovery for %s failed: %v\n", req.URL.Host, asErr)
 		return resp, nil
 	}
 	// Drain body so the connection can be reused.
@@ -70,13 +77,13 @@ func (o *oauthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	// Don't retry if we can't replay the request body.
 	if req.Body != nil && req.GetBody == nil {
 		// Run flow anyway so the next call has a token, but surface the 401 now.
-		if err := o.acquireAndStore(ctx, prmURL); err != nil {
+		if err := o.acquireAndStore(ctx, asMeta); err != nil {
 			return nil, err
 		}
 		return nil, fmt.Errorf("mcp request to %s required OAuth and request body cannot be replayed; retry the command", req.URL)
 	}
 
-	if err := o.acquireAndStore(ctx, prmURL); err != nil {
+	if err := o.acquireAndStore(ctx, asMeta); err != nil {
 		return nil, err
 	}
 	if err := o.attachToken(ctx, req); err != nil {
@@ -141,7 +148,7 @@ func (o *oauthRoundTripper) attachToken(ctx context.Context, req *http.Request) 
 
 // acquireAndStore runs the interactive OAuth flow under the round tripper's
 // mutex so only one browser opens even when many requests race on 401.
-func (o *oauthRoundTripper) acquireAndStore(ctx context.Context, prmURL string) error {
+func (o *oauthRoundTripper) acquireAndStore(ctx context.Context, asMeta *asMetadata) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -151,7 +158,7 @@ func (o *oauthRoundTripper) acquireAndStore(ctx context.Context, prmURL string) 
 		return nil
 	}
 	pt, err := performInteractiveFlow(ctx, oauthFlowParams{
-		PRMURL:       prmURL,
+		ASMeta:       asMeta,
 		CallbackPort: o.cbPort,
 		ClientID:     o.clientID,
 		Stderr:       o.stderr,
